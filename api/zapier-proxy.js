@@ -19,8 +19,11 @@ export default async function handler(req, res) {
     try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
   }
   if (!body || !body.email) {
-    return res.status(400).json({ error: 'Missing email in request body', received: JSON.stringify(body) });
+    return res.status(400).json({ error: 'Missing email in request body' });
   }
+
+  const matchEmail = body.email;
+  const submittedAt = Date.now();
 
   let webhookResp;
   try {
@@ -38,12 +41,11 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'Zapier webhook failed', status: webhookResp.status, detail: text });
   }
 
-  const matchEmail = body.email;
-  const deadline   = Date.now() + POLL_TIMEOUT_MS;
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    const meet_link = await fetchMeetLinkFromSheets(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail);
+    const meet_link = await fetchLatestMeetLink(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail, submittedAt);
     if (meet_link) return res.status(200).json({ status: 'success', meet_link });
   }
 
@@ -91,7 +93,7 @@ async function getGoogleAccessToken(clientEmail, privateKey) {
   return tokenData.access_token;
 }
 
-async function fetchMeetLinkFromSheets(sheetId, clientEmail, privateKey, email) {
+async function fetchLatestMeetLink(sheetId, clientEmail, privateKey, email, submittedAt) {
   try {
     const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
     const range = 'Sheet1!A:C';
@@ -109,14 +111,23 @@ async function fetchMeetLinkFromSheets(sheetId, clientEmail, privateKey, email) 
     const data = await resp.json();
     const rows = data.values || [];
 
-    for (let i = rows.length - 1; i >= 1; i--) {
-      const [rowEmail, rowMeetLink] = rows[i];
-      if (rowEmail === email && rowMeetLink) return rowMeetLink;
+    let latestLink = null;
+    let latestTime = 0;
+
+    for (let i = 1; i < rows.length; i++) {
+      const [rowEmail, rowMeetLink, rowTimestamp] = rows[i];
+      if (rowEmail === email && rowMeetLink) {
+        const rowTime = rowTimestamp ? new Date(rowTimestamp).getTime() : 0;
+        if (rowTime >= submittedAt - 60000 && rowTime > latestTime) {
+          latestTime = rowTime;
+          latestLink = rowMeetLink;
+        }
+      }
     }
 
-    return null;
+    return latestLink;
   } catch (err) {
-    console.error('fetchMeetLinkFromSheets error:', err);
+    console.error('fetchLatestMeetLink error:', err);
     return null;
   }
 }
