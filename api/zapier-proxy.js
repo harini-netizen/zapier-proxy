@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Handle CORS preflight
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -15,34 +14,37 @@ export default async function handler(req, res) {
   const POLL_INTERVAL_MS = 2000;
   const POLL_TIMEOUT_MS  = 20000;
 
-  const body = req.body;
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+  }
   if (!body || !body.email) {
-    return res.status(400).json({ error: 'Invalid request body' });
+    return res.status(400).json({ error: 'Missing email in request body', received: JSON.stringify(body) });
   }
 
-  // Step 1: Send to Zapier webhook
-  const webhookResp = await fetch(ZAPIER_WEBHOOK, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  let webhookResp;
+  try {
+    webhookResp = await fetch(ZAPIER_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    return res.status(502).json({ error: 'Zapier webhook fetch failed', detail: err.message });
+  }
 
   if (!webhookResp.ok) {
-    return res.status(502).json({ error: 'Zapier webhook failed', status: webhookResp.status });
+    const text = await webhookResp.text();
+    return res.status(502).json({ error: 'Zapier webhook failed', status: webhookResp.status, detail: text });
   }
 
-  // Step 2: Poll Google Sheets for the meet_link
   const matchEmail = body.email;
   const deadline   = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-
     const meet_link = await fetchMeetLinkFromSheets(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail);
-
-    if (meet_link) {
-      return res.status(200).json({ status: 'success', meet_link });
-    }
+    if (meet_link) return res.status(200).json({ status: 'success', meet_link });
   }
 
   return res.status(202).json({
@@ -50,8 +52,6 @@ export default async function handler(req, res) {
     message: 'Booking submitted but meet_link not yet available. Please check your email.'
   });
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -94,7 +94,6 @@ async function getGoogleAccessToken(clientEmail, privateKey) {
 async function fetchMeetLinkFromSheets(sheetId, clientEmail, privateKey, email) {
   try {
     const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
-
     const range = 'Sheet1!A:C';
     const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`;
 
@@ -110,12 +109,9 @@ async function fetchMeetLinkFromSheets(sheetId, clientEmail, privateKey, email) 
     const data = await resp.json();
     const rows = data.values || [];
 
-    // Search from bottom (newest first), skip header row
     for (let i = rows.length - 1; i >= 1; i--) {
       const [rowEmail, rowMeetLink] = rows[i];
-      if (rowEmail === email && rowMeetLink) {
-        return rowMeetLink;
-      }
+      if (rowEmail === email && rowMeetLink) return rowMeetLink;
     }
 
     return null;
