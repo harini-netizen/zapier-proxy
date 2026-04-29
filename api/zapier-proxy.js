@@ -118,7 +118,7 @@ async function fetchLatestMeetLink(sheetId, clientEmail, privateKey, email, subm
       const [rowEmail, rowMeetLink, rowTimestamp] = rows[i];
       if (rowEmail === email && rowMeetLink) {
         const rowTime = rowTimestamp ? new Date(rowTimestamp).getTime() : 0;
-        if (rowTime >= submittedAt - 60000 && rowTime > latestTime) {
+        if (rowTime >= submittedAt && rowTime > latestTime) {
           latestTime = rowTime;
           latestLink = rowMeetLink;
         }
