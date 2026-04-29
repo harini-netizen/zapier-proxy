@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/zapier-proxy.js": {
+      "maxDuration": 30
+    }
+  }
+}
