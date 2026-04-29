@@ -23,8 +23,11 @@ export default async function handler(req, res) {
   }
 
   const matchEmail = body.email;
-  const submittedAt = Date.now();
 
+  // Step 1: Get current row count BEFORE webhook
+  const rowCountBefore = await getRowCount(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail);
+
+  // Step 2: Send to Zapier webhook ONCE
   let webhookResp;
   try {
     webhookResp = await fetch(ZAPIER_WEBHOOK, {
@@ -41,11 +44,12 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'Zapier webhook failed', status: webhookResp.status, detail: text });
   }
 
+  // Step 3: Poll for a NEW row added AFTER webhook
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    const meet_link = await fetchLatestMeetLink(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail, submittedAt);
+    const meet_link = await fetchNewMeetLink(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail, rowCountBefore);
     if (meet_link) return res.status(200).json({ status: 'success', meet_link });
   }
 
@@ -93,41 +97,58 @@ async function getGoogleAccessToken(clientEmail, privateKey) {
   return tokenData.access_token;
 }
 
-async function fetchLatestMeetLink(sheetId, clientEmail, privateKey, email, submittedAt) {
+async function getRowCount(sheetId, clientEmail, privateKey, email) {
   try {
     const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
-    const range = 'Sheet1!A:C';
-    const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Sheet1!A:B`;
 
     const resp = await fetch(url, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
 
-    if (!resp.ok) {
-      console.error('Sheets API error:', resp.status, await resp.text());
-      return null;
+    if (!resp.ok) return 0;
+
+    const data = await resp.json();
+    const rows = data.values || [];
+    let count = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][0] === email && rows[i][1]) count++;
     }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+async function fetchNewMeetLink(sheetId, clientEmail, privateKey, email, rowCountBefore) {
+  try {
+    const accessToken = await getGoogleAccessToken(clientEmail, privateKey);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Sheet1!A:C`;
+
+    const resp = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+
+    if (!resp.ok) return null;
 
     const data = await resp.json();
     const rows = data.values || [];
 
-    let latestLink = null;
-    let latestTime = 0;
-
+    const matchingRows = [];
     for (let i = 1; i < rows.length; i++) {
-      const [rowEmail, rowMeetLink, rowTimestamp] = rows[i];
+      const [rowEmail, rowMeetLink] = rows[i];
       if (rowEmail === email && rowMeetLink) {
-        const rowTime = rowTimestamp ? new Date(rowTimestamp).getTime() : 0;
-        if (rowTime >= submittedAt && rowTime > latestTime) {
-          latestTime = rowTime;
-          latestLink = rowMeetLink;
-        }
+        matchingRows.push(rowMeetLink);
       }
     }
 
-    return latestLink;
+    if (matchingRows.length > rowCountBefore) {
+      return matchingRows[matchingRows.length - 1];
+    }
+
+    return null;
   } catch (err) {
-    console.error('fetchLatestMeetLink error:', err);
+    console.error('fetchNewMeetLink error:', err);
     return null;
   }
 }
