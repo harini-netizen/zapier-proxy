@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/27399381/uvmdqko/';
+  const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/17069947/uvxy225/';
   const SHEET_ID       = process.env.GOOGLE_SHEET_ID;
   const CLIENT_EMAIL   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const PRIVATE_KEY    = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
