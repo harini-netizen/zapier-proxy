@@ -9,7 +9,29 @@ export default async function handler(req, res) {
   const ZAPIER_WEBHOOK = 'https://hooks.zapier.com/hooks/catch/17069947/uvxy225/';
   const SHEET_ID       = process.env.GOOGLE_SHEET_ID;
   const CLIENT_EMAIL   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const PRIVATE_KEY    = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+  // ── Robust private key parsing (handles all Vercel storage formats) ──
+  let PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY || '';
+  PRIVATE_KEY = PRIVATE_KEY
+    .replace(/^"(.*)"$/s, '$1')   // strip surrounding quotes if any
+    .replace(/\\n/g, '\n')        // literal \n → real newline
+    .trim();
+
+  // If still no newlines, try base64 decode
+  if (!PRIVATE_KEY.includes('\n')) {
+    try {
+      const decoded = Buffer.from(PRIVATE_KEY, 'base64').toString('utf8');
+      if (decoded.includes('BEGIN PRIVATE KEY')) PRIVATE_KEY = decoded;
+    } catch {}
+  }
+
+  // Debug log — check Vercel Function Logs after deploying
+  console.log('KEY_DEBUG', {
+    length: PRIVATE_KEY.length,
+    hasNewlines: PRIVATE_KEY.includes('\n'),
+    startsCorrectly: PRIVATE_KEY.startsWith('-----BEGIN'),
+    first40: PRIVATE_KEY.substring(0, 40),
+  });
 
   const POLL_TIMEOUT_MS = 8000;
 
@@ -47,7 +69,7 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'Zapier webhook fetch failed', detail: err.message });
   }
 
-  // Poll with exponential backoff: 500ms → 1000ms → 1500ms → 2000ms (max)
+  // Poll with exponential backoff: check at 500ms → 1s → 1.5s → 2s
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let interval = 500;
 
