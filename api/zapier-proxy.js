@@ -10,30 +10,17 @@ export default async function handler(req, res) {
   const SHEET_ID       = process.env.GOOGLE_SHEET_ID;
   const CLIENT_EMAIL   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 
-  // ── Robust private key parsing (handles all Vercel storage formats) ──
   let PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY || '';
   PRIVATE_KEY = PRIVATE_KEY
-    .replace(/^"(.*)"$/s, '$1')   // strip surrounding quotes if any
-    .replace(/\\n/g, '\n')        // literal \n → real newline
+    .replace(/^"(.*)"$/s, '$1')
+    .replace(/\\n/g, '\n')
     .trim();
-
-  // If still no newlines, try base64 decode
   if (!PRIVATE_KEY.includes('\n')) {
     try {
       const decoded = Buffer.from(PRIVATE_KEY, 'base64').toString('utf8');
       if (decoded.includes('BEGIN PRIVATE KEY')) PRIVATE_KEY = decoded;
     } catch {}
   }
-
-  // Debug log — check Vercel Function Logs after deploying
-  console.log('KEY_DEBUG', {
-    length: PRIVATE_KEY.length,
-    hasNewlines: PRIVATE_KEY.includes('\n'),
-    startsCorrectly: PRIVATE_KEY.startsWith('-----BEGIN'),
-    first40: PRIVATE_KEY.substring(0, 40),
-  });
-
-  const POLL_TIMEOUT_MS = 8000;
 
   let body = req.body;
   if (typeof body === 'string') {
@@ -42,8 +29,8 @@ export default async function handler(req, res) {
   if (!body?.email) return res.status(400).json({ error: 'Missing email in request body' });
 
   const email = body.email;
+  const mode  = body.mode || 'trigger'; // 'trigger' or 'poll'
 
-  // Fetch token once, reuse across all polls
   let accessToken;
   try {
     accessToken = await getGoogleAccessToken(CLIENT_EMAIL, PRIVATE_KEY);
@@ -51,10 +38,17 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Failed to get Google access token', detail: err.message });
   }
 
-  // Snapshot row count before triggering Zapier
+  // ── POLL MODE: just check if link appeared yet ───────────────────────────
+  if (mode === 'poll') {
+    const countBefore = parseInt(body.countBefore || '0', 10);
+    const meet_link   = await fetchNewMeetLink(SHEET_ID, accessToken, email, countBefore);
+    if (meet_link) return res.status(200).json({ status: 'success', meet_link });
+    return res.status(200).json({ status: 'pending' });
+  }
+
+  // ── TRIGGER MODE: snapshot count, fire Zapier, return immediately ────────
   const countBefore = await getMeetLinkCount(SHEET_ID, accessToken, email);
 
-  // Trigger Zapier
   try {
     const webhookResp = await fetch(ZAPIER_WEBHOOK, {
       method: 'POST',
@@ -69,28 +63,10 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'Zapier webhook fetch failed', detail: err.message });
   }
 
-  // Poll with exponential backoff: check at 500ms → 1s → 1.5s → 2s
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
-  let interval = 500;
-
-  while (Date.now() < deadline) {
-    const meet_link = await fetchNewMeetLink(SHEET_ID, accessToken, email, countBefore);
-    if (meet_link) return res.status(200).json({ status: 'success', meet_link });
-    await sleep(interval);
-    interval = Math.min(interval + 500, 2000);
-  }
-
-  return res.status(202).json({
-    status: 'pending',
-    message: 'Booking submitted but meet_link not yet available. Please check your email.',
-  });
+  return res.status(200).json({ status: 'triggered', countBefore });
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getGoogleAccessToken(clientEmail, privateKey) {
   const now     = Math.floor(Date.now() / 1000);
@@ -103,7 +79,7 @@ async function getGoogleAccessToken(clientEmail, privateKey) {
     exp: now + 3600,
   };
 
-  const encode = obj => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const encode   = obj => Buffer.from(JSON.stringify(obj)).toString('base64url');
   const sigInput = `${encode(header)}.${encode(payload)}`;
 
   const crypto = require('crypto');
@@ -149,9 +125,7 @@ async function fetchNewMeetLink(sheetId, accessToken, email, countBefore) {
     const { values = [] } = await resp.json();
     const links = [];
     for (let i = 1; i < values.length; i++) {
-      if (values[i][0] === email && values[i][1]) {
-        links.push(values[i][1]);
-      }
+      if (values[i][0] === email && values[i][1]) links.push(values[i][1]);
     }
     return links.length > countBefore ? links[links.length - 1] : null;
   } catch (err) {
