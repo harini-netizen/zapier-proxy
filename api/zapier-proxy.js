@@ -11,8 +11,8 @@ export default async function handler(req, res) {
   const CLIENT_EMAIL   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const PRIVATE_KEY    = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-  const POLL_INTERVAL_MS = 2000;
-  const POLL_TIMEOUT_MS  = 20000;
+  const POLL_INTERVAL_MS = 3000;
+  const POLL_TIMEOUT_MS  = 45000;
 
   let body = req.body;
   if (typeof body === 'string') {
