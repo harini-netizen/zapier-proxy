@@ -24,10 +24,8 @@ export default async function handler(req, res) {
 
   const matchEmail = body.email;
 
-  // Step 1: Get current row count BEFORE webhook
   const rowCountBefore = await getRowCount(SHEET_ID, CLIENT_EMAIL, PRIVATE_KEY, matchEmail);
 
-  // Step 2: Send to Zapier webhook ONCE
   let webhookResp;
   try {
     webhookResp = await fetch(ZAPIER_WEBHOOK, {
@@ -44,7 +42,6 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'Zapier webhook failed', status: webhookResp.status, detail: text });
   }
 
-  // Step 3: Poll for a NEW row added AFTER webhook
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
